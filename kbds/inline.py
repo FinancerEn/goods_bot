@@ -28,7 +28,7 @@ inline_products = InlineKeyboardMarkup(
     ],
 )
 
-inline_back_commod = InlineKeyboardMarkup(
+inline_confirm_payment = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="✅ Подтвердить заявку", callback_data="confirm_request")],
     ],
