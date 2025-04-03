@@ -1,0 +1,296 @@
+from asyncio.log import logger
+from aiogram import F, Router, types
+from aiogram.filters import Command, StateFilter, or_f
+from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from filters.config import GROUP_ID
+from filters.chat_types import ChatTypeFilter
+from filters.bot import CustomBot
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from database.orm_query import (
+    orm_add_product,
+    orm_delete_product,
+    orm_get_product,
+    orm_get_products,
+    orm_update_product,
+)
+
+from filters.chat_types import ChatTypeFilter, IsAdmin
+
+from kbds.inline import get_callback_btns
+from kbds.reply import get_keyboard
+
+
+admin_router = Router()
+admin_router.message.filter(ChatTypeFilter(["private"]), IsAdmin())
+
+
+ADMIN_KB = get_keyboard(
+    "Добавить товар",                   # индекс 0
+    "Ассортимент",                      # индекс 1
+    placeholder="Выберите действие",    # текст-подсказка в поле ввода.
+    sizes=(2,),                         # количество кнопок в каждой строке
+)
+
+
+class AddProduct(StatesGroup):
+    # Шаги состояний
+    name = State()
+    description = State()
+    price = State()
+    image = State()
+
+    product_for_change = None
+
+    texts = {
+        "AddProduct:name": "Введите название заново:",
+        "AddProduct:description": "Введите описание заново:",
+        "AddProduct:price": "Введите стоимость заново:",
+        "AddProduct:image": "Этот стейт последний, поэтому...",
+    }
+
+
+@admin_router.message(Command("admin"))
+async def admin_features(message: Message, bot: CustomBot):
+    try:
+        # Проверяем инициализацию списка админов
+        if not hasattr(bot, 'my_admins_list'):
+            bot.my_admins_list = []
+
+        if message.from_user and message.from_user.id in bot.my_admins_list:
+            # Дополнительная проверка прав (на случай если список устарел)
+            if GROUP_ID and message.from_user.id not in bot.my_admins_list:
+                admins = await bot.get_chat_administrators(GROUP_ID)
+                bot.my_admins_list = [
+                    admin.user.id
+                    for admin in admins
+                    if admin.status in ["creator", "administrator"]
+                ]
+
+        if message.from_user and message.from_user.id in bot.my_admins_list:
+            # Основная проверка доступа
+            if message.from_user.id in bot.my_admins_list:
+                await message.answer(
+                    "Админ-панель:",
+                    reply_markup=ADMIN_KB
+                )
+            else:
+                await message.answer("❌ Доступ запрещен")
+
+    except Exception as e:
+        print(f"Ошибка в админ-панели: {e}")
+        await message.answer("⚠️ Произошла ошибка при проверке прав")
+
+
+@admin_router.message(F.text == "Ассортимент")
+async def starring_at_product(message: types.Message, session: AsyncSession):
+    for product in await orm_get_products(session):
+        await message.answer_photo(
+            product.image,
+            caption=f"<strong>{product.name}\
+                    </strong>\n{product.description}\nСтоимость: {round(product.price, 2)}",
+            reply_markup=get_callback_btns(
+                btns={
+                    "Удалить": f"delete_{product.id}",
+                    "Изменить": f"change_{product.id}",
+                }
+            ),
+        )
+    await message.answer("ОК, вот список товаров ⏫")
+
+
+@admin_router.callback_query(F.data.startswith("delete_"))
+async def delete_product_callback(callback: types.CallbackQuery, session: AsyncSession):
+    if not callback.data:
+        return
+    product_id = callback.data.split("_")[-1]
+    await orm_delete_product(session, int(product_id))
+
+    await callback.answer("Товар удален")
+    if isinstance(callback.message, Message):
+        await callback.message.answer("Товар удален!")
+
+
+# Становимся в состояние ожидания ввода name
+@admin_router.callback_query(StateFilter(None), F.data.startswith("change_"))
+async def change_product_callback(
+    callback: types.CallbackQuery, state: FSMContext, session: AsyncSession
+):
+    if not callback.data:
+        return
+    product_id = callback.data.split("_")[-1]
+
+    product_for_change = await orm_get_product(session, int(product_id))
+
+    AddProduct.product_for_change = product_for_change
+
+    await callback.answer()
+    await callback.message.answer(
+        "Введите название товара", reply_markup=types.ReplyKeyboardRemove()
+    )
+    await state.set_state(AddProduct.name)
+
+
+# Становимся в состояние ожидания ввода name
+@admin_router.message(StateFilter(None), F.text == "Добавить товар")
+async def add_product(message: types.Message, state: FSMContext):
+    await message.answer(
+        "Введите название товара", reply_markup=types.ReplyKeyboardRemove()
+    )
+    await state.set_state(AddProduct.name)
+
+
+# Хендлер отмены и сброса состояния должен быть всегда именно здесь,
+# после того как только встали в состояние номер 1 (элементарная очередность фильтров)
+@admin_router.message(StateFilter("*"), Command("отмена"))
+@admin_router.message(StateFilter("*"), F.text.casefold() == "отмена")
+async def cancel_handler(message: types.Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+    if AddProduct.product_for_change:
+        AddProduct.product_for_change = None
+    await state.clear()
+    await message.answer("Действия отменены", reply_markup=ADMIN_KB)
+
+
+# Вернутся на шаг назад (на прошлое состояние)
+@admin_router.message(StateFilter("*"), Command("назад"))
+@admin_router.message(StateFilter("*"), F.text.casefold() == "назад")
+async def back_step_handler(message: types.Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+
+    if current_state == AddProduct.name:
+        await message.answer(
+            'Предидущего шага нет, или введите название товара или напишите "отмена"'
+        )
+        return
+
+    previous = None
+    for step in AddProduct.__all_states__:
+        if step.state == current_state:
+            await state.set_state(previous)
+            await message.answer(
+                f"Ок, вы вернулись к прошлому шагу \n {AddProduct.texts[previous.state]}"
+            )
+            return
+        previous = step
+
+
+# Ловим данные для состояние name и потом меняем состояние на description
+@admin_router.message(AddProduct.name, or_f(F.text, F.text == "."))
+async def add_name(message: types.Message, state: FSMContext):
+    if message.text == ".":
+        await state.update_data(name=AddProduct.product_for_change.name)
+    else:
+        # Здесь можно сделать какую либо дополнительную проверку
+        # и выйти из хендлера не меняя состояние с отправкой соответствующего сообщения
+        # например:
+        if len(message.text) >= 100:
+            await message.answer(
+                "Название товара не должно превышать 100 символов. \n Введите заново"
+            )
+            return
+
+        await state.update_data(name=message.text)
+    await message.answer("Введите описание товара")
+    await state.set_state(AddProduct.description)
+
+
+# Хендлер для отлова некорректных вводов для состояния name
+@admin_router.message(AddProduct.name)
+async def add_name2(message: types.Message, state: FSMContext):
+    await message.answer("Вы ввели не допустимые данные, введите текст названия товара")
+
+
+# Ловим данные для состояние description и потом меняем состояние на price
+@admin_router.message(AddProduct.description, or_f(F.text, F.text == "."))
+async def add_description(message: types.Message, state: FSMContext):
+    if message.text == ".":
+        await state.update_data(description=AddProduct.product_for_change.description)
+    else:
+        await state.update_data(description=message.text)
+    await message.answer("Введите стоимость товара")
+    await state.set_state(AddProduct.price)
+
+
+# Хендлер для отлова некорректных вводов для состояния description
+@admin_router.message(AddProduct.description)
+async def add_description2(message: types.Message, state: FSMContext):
+    await message.answer("Вы ввели не допустимые данные, введите текст описания товара")
+
+
+# Ловим данные для состояние price и потом меняем состояние на image
+@admin_router.message(AddProduct.price, or_f(F.text, F.text == "."))
+async def add_price(message: types.Message, state: FSMContext):
+    if message.text == ".":
+        await state.update_data(price=AddProduct.product_for_change.price)
+    else:
+        try:
+            float(message.text)
+        except ValueError:
+            await message.answer("Введите корректное значение цены")
+            return
+
+        await state.update_data(price=message.text)
+    await message.answer("Загрузите изображение товара")
+    await state.set_state(AddProduct.image)
+
+
+# Хендлер для отлова некорректных ввода для состояния price
+@admin_router.message(AddProduct.price)
+async def add_price2(message: types.Message, state: FSMContext):
+    await message.answer("Вы ввели не допустимые данные, введите стоимость товара")
+
+
+# Ловим данные для состояние image и потом выходим из состояний
+@admin_router.message(AddProduct.image, F.photo)
+async def add_image(message: types.Message, state: FSMContext, session: AsyncSession):
+    try:
+        # Получаем фото максимального качества
+        photo = message.photo[-1]
+        file_id = photo.file_id
+
+        # Сохраняем file_id в состояние
+        await state.update_data(image=file_id)
+
+        # Получаем все данные из состояния
+        data = await state.get_data()
+
+        # Добавляем/обновляем товар в БД
+        if AddProduct.product_for_change:
+            await orm_update_product(session, AddProduct.product_for_change.id, data)
+        else:
+            await orm_add_product(session, data)
+
+        await message.answer_photo(
+            photo=file_id,
+            caption=(
+                "Товар успешно добавлен!\n"
+                f"Название: {data['name']}\n"
+                f"Описание: {data['description']}\n"
+                f"Цена: {data['price']}"
+            ),
+            reply_markup=ADMIN_KB
+        )
+        await state.clear()
+
+    except Exception as e:
+        logger.error(f"Ошибка при добавлении фото: {e}")
+        await message.answer(
+            "Не удалось обработать фото. Попробуйте ещё раз или отправьте другое фото.",
+            reply_markup=ADMIN_KB
+        )
+
+
+@admin_router.message(AddProduct.image)
+async def incorrect_image(message: types.Message):
+    await message.answer("Пожалуйста, отправьте фото товара или введите '.' для использования текущего фото")
+
+
+@admin_router.message(AddProduct.image)
+async def add_image2(message: types.Message, state: FSMContext):
+    await message.answer("Отправьте фото мебели")

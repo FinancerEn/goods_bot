@@ -2,7 +2,7 @@
 # Импортируем Filter базовый класс.
 from aiogram.filters import Filter
 from aiogram.types import Message
-# from aiogram import Bot
+from filters.bot import CustomBot
 # from aiogram.exceptions import TelegramBadRequest
 # from aiogram.types import ChatMemberAdministrator, ChatMemberOwner
 
@@ -13,6 +13,13 @@ class ChatTypeFilter(Filter):
 
     async def __call__(self, message: Message) -> bool:
         return message.chat.type in self.chat_types
+
+
+class IsAdmin(Filter):
+    async def __call__(self, message: Message, bot: CustomBot) -> bool:
+        if not message.from_user:  # Проверяем, есть ли отправитель сообщения
+            return False
+        return message.from_user.id in bot.my_admins_list
 
 
 # class IsAdmin(Filter):

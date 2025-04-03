@@ -1,7 +1,7 @@
 import os
 from typing import Optional
-from aiogram import Bot, Router, F
-from aiogram.types import CallbackQuery, Message
+from aiogram import Router, F
+from aiogram.types import CallbackQuery
 from filters.chat_types import ChatTypeFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.models import UserFSM
 from dotenv import load_dotenv
 
-from text_message import text
 from kbds import inline
 
 load_dotenv()
@@ -56,6 +55,10 @@ async def handle_main_buttons(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(clicked_buttons=clicked_buttons)
 
+    # Проверяем, есть ли сообщение
+    if callback.message is None:
+        await callback.answer()  # Просто закрываем callback-запрос
+        return
     # Если нажали "📢 Связаться с оператором", отправляем кнопку подтверждения
     if button_type == "main_feedback":
         await state.set_state(UserState.feedback)  # Ждём подтверждения

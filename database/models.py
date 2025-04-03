@@ -1,5 +1,5 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import BigInteger, Column, String, Float, DateTime, func, Integer
+from sqlalchemy import BigInteger, Column, String, Text, Float, DateTime, func, Integer
 
 
 class Base(DeclarativeBase):
@@ -21,21 +21,35 @@ class UserFSM(Base):
     updated_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
-class Cart(Base):
-    __tablename__ = "cart"
+class Product(Base):
+    __tablename__ = 'product'
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=True)
-    user_name: Mapped[str] = mapped_column(String, nullable=True)
-    name: Mapped[str] = mapped_column(String(150), nullable=True)
-    description: Mapped[str] = mapped_column(String(10), nullable=True)
-    price: Mapped[float] = mapped_column(Float(asdecimal=True), nullable=True)
-    image = Column(String(150), nullable=True)
-    quantity: Mapped[int] = mapped_column(Integer, nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    description: Mapped[str] = mapped_column(Text)
+    price: Mapped[float] = mapped_column(Float(asdecimal=True), nullable=False)
+    image: Mapped[str] = mapped_column(String(150))
 
     # Поля времени
     created_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
+# class Cart(Base):
+#     __tablename__ = "cart"
+
+#     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+#     user_id: Mapped[int] = mapped_column(Integer, nullable=True)
+#     user_name: Mapped[str] = mapped_column(String, nullable=True)
+#     name: Mapped[str] = mapped_column(String(150), nullable=True)
+#     description: Mapped[str] = mapped_column(String(10), nullable=True)
+#     price: Mapped[float] = mapped_column(Float(asdecimal=True), nullable=True)
+#     image = Column(String(150), nullable=True)
+#     quantity: Mapped[int] = mapped_column(Integer, nullable=True)
+
+#     # Поля времени
+#     created_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
+#     updated_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
 # @dataclass
