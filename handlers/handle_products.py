@@ -1,5 +1,3 @@
-import os
-from typing import Optional
 from aiogram import Router, F
 from aiogram.types import FSInputFile, CallbackQuery, Message
 from filters.chat_types import ChatTypeFilter
@@ -11,10 +9,6 @@ from kbds import inline
 
 load_dotenv()
 
-GROUP_ID_ENV = os.getenv('GROUP_ID')
-GROUP_ID: Optional[int] = (
-    int(GROUP_ID_ENV) if GROUP_ID_ENV and GROUP_ID_ENV.isdigit() else None
-)
 
 handle_products_router = Router()
 handle_products_router.message.filter(ChatTypeFilter(['private']))

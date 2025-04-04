@@ -1,7 +1,10 @@
-import os
-from typing import Optional
+# import os
+# from typing import Optionalimport logging
+import re
+from typing import Any
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
+from filters.config import GROUP_ID
 from filters.chat_types import ChatTypeFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -13,120 +16,143 @@ from kbds import inline
 
 load_dotenv()
 
-# Загружаем GROUP_ID
-GROUP_ID_ENV = os.getenv("GROUP_ID")
-GROUP_ID: Optional[int] = (
-    int(GROUP_ID_ENV) if GROUP_ID_ENV and GROUP_ID_ENV.isdigit() else None
-)
-
 # Создаем роутер
 handle_payment_router = Router()
 handle_payment_router.message.filter(ChatTypeFilter(["private"]))
+
+
+def safe_message(text: str) -> str:
+    escape_chars = r"\_*[]()~`>#+-=|{}.!"
+    return ''.join(
+        f'\\{char}' if char in escape_chars else char
+        for char in text
+    )
+
+# def escape_markdown(text: Any) -> str:
+#     """
+#     Экранирует спецсимволы для Telegram MarkdownV2.
+#     Преобразует None в пустую строку.
+#     """
+#     if not isinstance(text, str):
+#         text = str(text) if text is not None else ""
+#     return re.sub(r'([_*\[\]()~`>#+\-=|{}.!])', r'\\\1', text)
 
 
 # Определяем состояния пользователя
 class UserState(StatesGroup):
     clicked_buttons = State()  # Список нажатых кнопок
     feedback = State()
-    created_at = State()
-    updated_at = State()
+    name = State()
+    contacts = State()
 
 
 BUTTONS = {
     "main_payment": "💳 Оплата",
-    "main_feedback": "📢 Связаться с оператором",
+    # "main_feedback": "📢 Связаться с оператором",
     "main_cart": "🛒 Корзина",
     "main_products": "✅ Посмотреть товары"
 }
 
 
-# Обработчик нажатия на кнопки "main_..."
-@handle_payment_router.callback_query(F.data.startswith("main_"))
-async def handle_main_buttons(callback: CallbackQuery, state: FSMContext):
-    button_type = callback.data  # Получаем callback_data
-    data = await state.get_data()
-    clicked_buttons = data.get("clicked_buttons", [])
-
-    # Добавляем только уникальные кнопки
-    if "main_" not in clicked_buttons:
-        clicked_buttons.append(button_type)
-    # # Добавляем кнопку в список
-    # clicked_buttons.append(button_type)
-
-    await state.update_data(clicked_buttons=clicked_buttons)
-
-    # Проверяем, есть ли сообщение
-    if callback.message is None:
-        await callback.answer()  # Просто закрываем callback-запрос
-        return
-    # Если нажали "📢 Связаться с оператором", отправляем кнопку подтверждения
-    if button_type == "main_feedback":
-        await state.set_state(UserState.feedback)  # Ждём подтверждения
-        await callback.message.answer("Нажмите кнопку ниже, чтобы отправить заявку оператору:",
-                                      reply_markup=inline.inline_confirm_payment)
-    else:
-        await callback.answer()
+@handle_payment_router.callback_query(lambda c: c.data == "main_feedback")
+async def handle_feedback_main(callback: CallbackQuery, state: FSMContext):
+    await state.update_data(feedback="📢 Связаться с оператором")
+    await state.set_state(UserState.name)
+    await callback.message.answer('Введите ваше имя и отчество')
 
 
-@handle_payment_router.callback_query(F.data == "confirm_request", UserState.feedback)
+@handle_payment_router.message(UserState.name, F.text)
+async def handle_name_main(message: Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await state.set_state(UserState.contacts)
+
+    await message.answer(
+        '📞 Теперь укажите ваш номер телефона и удобный способ связи (Telegram, WhatsApp):')
+
+
+@handle_payment_router.message(UserState.contacts, F.text)
+async def handle_contacts_main(message: Message, state: FSMContext):
+    await state.update_data(contacts=message.text)
+    await message.answer("✅ Нажмите 'Отправить заявку', чтобы подтвердить.",
+                         reply_markup=inline.inline_confirm_payment)
+
+
+@handle_payment_router.callback_query(F.data == "confirm_request", UserState.contacts)
 async def confirm_request(
     callback: CallbackQuery,
     state: FSMContext,
     session: AsyncSession  # Добавляем сессию как зависимость
 ):
-    # 1. Получаем данные из FSM
-    data = await state.get_data()
-    clicked_buttons = data.get("clicked_buttons", [])
+    if isinstance(callback.message, Message):
+        # 1. Получаем данные из FSM
+        data = await state.get_data()
 
-    if not clicked_buttons:
-        await callback.answer("Нет данных для отправки", show_alert=True)
-        return
-
-    # 2. Формируем список с читаемыми названиями кнопок
-    formatted_buttons = [BUTTONS.get(btn, "Неизвестная кнопка") for btn in clicked_buttons]
-
-    # 3. Формируем сообщение для группы
-    order_info = (
-        f"🛒 *Новый запрос в боте!*\n"
-        f"👤 ID: `{callback.from_user.id}`\n"
-        f"👤 Имя: `{callback.from_user.full_name}`\n"
-        f"📋 Нажатые кнопки:\n" +
-        "\n".join([f"🔹 {btn}" for btn in formatted_buttons])
-    )
-
-    # 4. Сохраняем в PostgreSQL
-    try:
-        new_request = UserFSM(
+        new_order = UserFSM(
             user_id=callback.from_user.id,
             user_name=callback.from_user.full_name,
-            request_data=", ".join(formatted_buttons),  # Сохраняем реальные названия кнопок
-            feedback="Подтвержденная заявка"
+            name=data.get("name"),
+            contacts=data.get("contacts"),
+            feedback=data.get("feedback"),
         )
 
-        session.add(new_request)
+        async with session.begin():
+            session.add(new_order)
         await session.commit()
-    except Exception as db_error:
-        await session.rollback()
-        print(f"Ошибка БД: {db_error}")
-        await callback.answer("Ошибка обработки запроса", show_alert=True)
-        return
 
-    # 5. Отправляем в группу
-    try:
-        await callback.bot.send_message(
-            chat_id=int(GROUP_ID_ENV),
-            text=order_info,
-            parse_mode="Markdown"
+        # Формируем сообщение для группы
+        order_info = (
+            "🛒 *Новый запрос в боте\!*\n"
+            f"👤 *ID:* `{safe_message(str(callback.from_user.id))}`\n"
+            f"👤 *Имя пользователя:* `{safe_message(callback.from_user.full_name)}`\n"
+            f"👤 *Имя:* `{safe_message(str(data.get('name', '—')))}`\n"
+            f"👤 *Контакты:* `{safe_message(str(data.get('contacts', '—')))}`"
         )
-    except Exception as e:
-        print(f"Ошибка отправки: {e}")
-        await callback.answer("Сообщение не доставлено", show_alert=True)
-        return
 
-    # 6. Подтверждаем пользователю
-    await callback.message.answer("Оператор получил ваш запрос! ✅")
-    await state.clear()
-    await callback.answer()
+        # Отправляем в группу
+        if GROUP_ID and callback.bot:
+            try:
+                await callback.bot.send_message(
+                    chat_id=int(GROUP_ID),
+                    text=order_info,
+                    parse_mode="MarkdownV2"
+                )
+            except Exception as e:
+                print(f"Ошибка отправки: {e}")
+                await callback.answer("Сообщение не доставлено", show_alert=True)
+                return
+
+        # 6. Подтверждаем пользователю
+        await callback.message.answer("Оператор получил ваш запрос! ✅")
+        await state.clear()
+        await callback.answer()
+
+
+# # Обработчик нажатия на кнопки "main_..."
+# @handle_payment_router.callback_query(F.data.startswith("main_"))
+# async def handle_main_buttons(callback: CallbackQuery, state: FSMContext):
+#     button_type = callback.data  # Получаем callback_data
+#     data = await state.get_data()
+#     clicked_buttons = data.get("clicked_buttons", [])
+
+#     # Добавляем только уникальные кнопки
+#     if "main_" not in clicked_buttons:
+#         clicked_buttons.append(button_type)
+#     # # Добавляем кнопку в список
+#     # clicked_buttons.append(button_type)
+
+#     await state.update_data(clicked_buttons=clicked_buttons)
+
+#     # Проверяем, есть ли сообщение
+#     if callback.message is None:
+#         await callback.answer()  # Просто закрываем callback-запрос
+#         return
+#     # Если нажали "📢 Связаться с оператором", отправляем кнопку подтверждения
+#     if button_type == "main_feedback":
+#         await state.set_state(UserState.contac)  # Ждём подтверждения
+#         await callback.message.answer("Введите ваше имя и фамилию:")
+#     else:
+#         await callback.answer()
+# __________________________
 
 
 # @handle_payment_router.callback_query(F.data == "confirm_request", UserState.feedback)

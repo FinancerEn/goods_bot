@@ -3,7 +3,8 @@ from sqlalchemy import BigInteger, Column, String, Text, Float, DateTime, func, 
 
 
 class Base(DeclarativeBase):
-    pass
+    created: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
+    updated: Mapped[DateTime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
 class UserFSM(Base):
@@ -12,13 +13,11 @@ class UserFSM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, nullable=True)
     user_name: Mapped[str] = mapped_column(String, nullable=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
     payment: Mapped[str] = mapped_column(String, nullable=True)
     feedback: Mapped[str] = mapped_column(String, nullable=True)
+    contacts: Mapped[str] = mapped_column(String(255), nullable=False)
     request_data: Mapped[str] = mapped_column(String, nullable=True)
-
-    # Поля времени (теперь в каждой модели отдельно)
-    created_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
-    updated_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
 class Product(Base):
@@ -29,10 +28,6 @@ class Product(Base):
     description: Mapped[str] = mapped_column(Text)
     price: Mapped[float] = mapped_column(Float(asdecimal=True), nullable=False)
     image: Mapped[str] = mapped_column(String(150))
-
-    # Поля времени
-    created_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
-    updated_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
 # class Cart(Base):

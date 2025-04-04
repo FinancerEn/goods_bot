@@ -1,4 +1,3 @@
-from asyncio.log import logger
 from aiogram import F, Router, types
 from aiogram.filters import Command, StateFilter, or_f
 from aiogram.types import Message
@@ -247,43 +246,30 @@ async def add_price2(message: types.Message, state: FSMContext):
 
 
 # Ловим данные для состояние image и потом выходим из состояний
-@admin_router.message(AddProduct.image, F.photo)
+@admin_router.message(AddProduct.image, or_f(F.photo, F.text == "."))
 async def add_image(message: types.Message, state: FSMContext, session: AsyncSession):
+    if message.text and message.text == ".":
+        await state.update_data(image=AddProduct.product_for_change.image)
+
+    else:
+        await state.update_data(image=message.photo[-1].file_id)
+    data = await state.get_data()
     try:
-        # Получаем фото максимального качества
-        photo = message.photo[-1]
-        file_id = photo.file_id
-
-        # Сохраняем file_id в состояние
-        await state.update_data(image=file_id)
-
-        # Получаем все данные из состояния
-        data = await state.get_data()
-
-        # Добавляем/обновляем товар в БД
         if AddProduct.product_for_change:
             await orm_update_product(session, AddProduct.product_for_change.id, data)
         else:
             await orm_add_product(session, data)
-
-        await message.answer_photo(
-            photo=file_id,
-            caption=(
-                "Товар успешно добавлен!\n"
-                f"Название: {data['name']}\n"
-                f"Описание: {data['description']}\n"
-                f"Цена: {data['price']}"
-            ),
-            reply_markup=ADMIN_KB
-        )
+        await message.answer("Товар добавлен/изменен", reply_markup=ADMIN_KB)
         await state.clear()
 
     except Exception as e:
-        logger.error(f"Ошибка при добавлении фото: {e}")
         await message.answer(
-            "Не удалось обработать фото. Попробуйте ещё раз или отправьте другое фото.",
-            reply_markup=ADMIN_KB
+            f"Ошибка: \n{str(e)}\nОбратись к программеру, он опять денег хочет",
+            reply_markup=ADMIN_KB,
         )
+        await state.clear()
+
+    AddProduct.product_for_change = None
 
 
 @admin_router.message(AddProduct.image)
